@@ -4,21 +4,21 @@ using System.Text;
 using System.Threading;
 using System.Security.AccessControl;
 using System.Security.Principal;
-using System.Diagnostics;
 using System.Collections.Generic;
+using System.Diagnostics;
 
 // Ipc => Inter-process communications library
 
 namespace Coho.IpcLibrary {
 
-    // For user application to receive notifications regarding pipe messages
+    // Interface for user code to receive notifications regarding pipe messages
     public interface IpcCallback {
         void OnAsyncConnect (PipeStream pipe, out Object state);
         void OnAsyncDisconnect (PipeStream pipe, Object state);
         void OnAsyncMessage (PipeStream pipe, Byte [] data, Int32 bytes, Object state);
     }
 
-    // For internal data associated with pipes
+    // Internal data associated with pipes
     struct IpcPipeData {
         public PipeStream  pipe;
         public Object      state;
@@ -34,20 +34,20 @@ namespace Coho.IpcLibrary {
         private readonly IpcCallback m_callback;
         private readonly PipeSecurity m_ps;
 
-
         private bool m_running;
-        private List<IpcPipeData> m_pipes = new List<IpcPipeData>();
+        private Dictionary<PipeStream, IpcPipeData> m_pipes = new Dictionary<PipeStream, IpcPipeData>();
 
         public IpcServer (
             String      pipename,
-            IpcCallback callback
+            IpcCallback callback,
+            int         instances
         ) {
             Debug.Assert(!m_running);
+            m_running = true;
 
             // Save parameters for next new pipe
             m_pipename = pipename;
             m_callback = callback;
-            m_running   = true;
 
             // Provide full access to the current user so more pipe instances can be created
             m_ps = new PipeSecurity();
@@ -61,16 +61,29 @@ namespace Coho.IpcLibrary {
             );
  
             // Start accepting connections
-            IpcServerPipeCreate();
+            for (int i = 0; i < instances; ++i)
+                IpcServerPipeCreate();
         }
 
         public void IpcServerStop () {
+            // Close all pipes asynchronously
             lock(this) {
                 if (m_running) {
                     m_running = false;
-                    foreach (IpcPipeData pd in m_pipes)
-                        pd.pipe.Close();
+                    foreach(KeyValuePair<PipeStream, IpcPipeData> kvp in m_pipes)
+                        kvp.Key.Close();
                 }
+            }
+
+            // Wait for all pipes to close
+            for (;;) {
+                int count;
+                lock(this) {
+                    count = m_pipes.Count;
+                }
+                if (count == 0)
+                    break;
+                Thread.Sleep(5);
             }
         }
 
@@ -108,7 +121,7 @@ namespace Coho.IpcLibrary {
             lock(this) {
                 running = m_running;
                 if (running)
-                    m_pipes.Add(pd);
+                    m_pipes.Add(pd.pipe, pd);
             }
 
             // If server is still running
@@ -134,6 +147,10 @@ namespace Coho.IpcLibrary {
             }
             catch (Exception) {
                 m_callback.OnAsyncDisconnect(pd.pipe, pd.state);
+                lock(this) {
+                    bool removed = m_pipes.Remove(pd.pipe);
+                    Debug.Assert(removed);
+                }
             }
         }
 
@@ -152,47 +169,23 @@ namespace Coho.IpcLibrary {
     public class IpcClientPipe {
         private readonly NamedPipeClientStream m_pipe;
 
-        public IpcClientPipe(String serverName, String pipename, String message) {
+        public IpcClientPipe(String serverName, String pipename) {
             m_pipe = new NamedPipeClientStream(
                 serverName,
                 pipename,
                 PipeDirection.InOut,
                 PipeOptions.Asynchronous | PipeOptions.WriteThrough
             );
+        }
 
-            try {
-                m_pipe.Connect(100);
-            }
-            catch (TimeoutException e) {
-                Console.WriteLine(e);
-                return;
-            }
+        public PipeStream Connect (Int32 timeout) {
+            // NOTE: will throw on failure
+            m_pipe.Connect(timeout);
 
             // Must Connect before setting ReadMode
             m_pipe.ReadMode = PipeTransmissionMode.Message;
 
-            // Asynchronously send data to the server
-            Byte[] output = Encoding.UTF8.GetBytes(message);
-            Debug.Assert(output.Length < IpcServer.SERVER_IN_BUFFER_SIZE);
-            m_pipe.BeginWrite(output, 0, output.Length, OnWriteComplete, null);
-        }
-
-        private void OnWriteComplete(IAsyncResult result) {
-            // The data was sent to the server
-            m_pipe.EndWrite(result);
-
-            // Asynchronously read the server's response
-            Byte[] data = new Byte[IpcServer.SERVER_OUT_BUFFER_SIZE];
-            m_pipe.BeginRead(data, 0, data.Length, GotResponse, data);
-        }
-
-        private void GotResponse(IAsyncResult result) {
-            // The server responded, display the response and close out connection
-            Int32 bytesRead = m_pipe.EndRead(result);
-
-            Byte[] data = (Byte[])result.AsyncState;
-            Console.WriteLine("Server response: " + Encoding.UTF8.GetString(data, 0, bytesRead));
-            m_pipe.Close();
+            return m_pipe;
         }
     }
 
