@@ -35,6 +35,7 @@ namespace Coho.IpcLibrary {
         private readonly PipeSecurity m_ps;
 
         private bool m_running;
+        private Thread m_bgthread;
         private Dictionary<PipeStream, IpcPipeData> m_pipes = new Dictionary<PipeStream, IpcPipeData>();
 
         public IpcServer (
@@ -63,9 +64,34 @@ namespace Coho.IpcLibrary {
             // Start accepting connections
             for (int i = 0; i < instances; ++i)
                 IpcServerPipeCreate();
+
+            // Create a background thread to detect dead connections
+            m_bgthread = new Thread(new ThreadStart(BgThreadProc));
+            m_bgthread.Start();
+        }
+
+        public void BgThreadProc() {
+            // This function blows because it should be unncessary, but it is apparently the only way
+            // to detect dead pipes. Alternative methods that don't work:
+            // 1. Set ReadTimeout on PipeStream: doesn't work on async sockets
+            // 2. Use pinging: requires that this library puts an API dependency on the
+            //    application to perform pinging, or forces this library to define a
+            //    pinging protocol. Either way, the client then needs to implement pinging - yuck!
+            // 3. Have C# BeginRead fail when the remote side gets closed? Since the pipe needs to
+            //    detect disconnect so IsConnected works properly, it must already know!
+            while (m_running) {
+                lock(this) {
+                    foreach(KeyValuePair<PipeStream, IpcPipeData> kvp in m_pipes) {
+                        if (!kvp.Key.IsConnected)
+                            kvp.Key.Close();
+                    }
+                }
+                Thread.Sleep(500);
+            }
         }
 
         public void IpcServerStop () {
+            
             // Close all pipes asynchronously
             lock(this) {
                 if (m_running) {
@@ -74,6 +100,8 @@ namespace Coho.IpcLibrary {
                         kvp.Key.Close();
                 }
             }
+
+            m_bgthread.Join();
 
             // Wait for all pipes to close
             for (;;) {
