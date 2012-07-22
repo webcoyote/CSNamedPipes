@@ -36,6 +36,7 @@ namespace Coho.IpcLibrary {
 
         private bool m_running;
         private Thread m_bgthread;
+        private ManualResetEvent m_bgevent;
         private Dictionary<PipeStream, IpcPipeData> m_pipes = new Dictionary<PipeStream, IpcPipeData>();
 
         public IpcServer (
@@ -66,6 +67,7 @@ namespace Coho.IpcLibrary {
                 IpcServerPipeCreate();
 
             // Create a background thread to detect dead connections
+            m_bgevent = new ManualResetEvent(false);
             m_bgthread = new Thread(new ThreadStart(BgThreadProc));
             m_bgthread.Start();
         }
@@ -79,15 +81,14 @@ namespace Coho.IpcLibrary {
             //    pinging protocol. Either way, the client then needs to implement pinging - yuck!
             // 3. Have C# BeginRead fail when the remote side gets closed? Since the pipe needs to
             //    detect disconnect so IsConnected works properly, it must already know!
-            while (m_running) {
+            do {
                 lock(this) {
                     foreach(KeyValuePair<PipeStream, IpcPipeData> kvp in m_pipes) {
                         if (!kvp.Key.IsConnected)
                             kvp.Key.Close();
                     }
                 }
-                Thread.Sleep(500);
-            }
+            } while (!m_bgevent.WaitOne(5000));
         }
 
         public void IpcServerStop () {
@@ -96,6 +97,7 @@ namespace Coho.IpcLibrary {
             lock(this) {
                 if (m_running) {
                     m_running = false;
+                    m_bgevent.Set();
                     foreach(KeyValuePair<PipeStream, IpcPipeData> kvp in m_pipes)
                         kvp.Key.Close();
                 }
