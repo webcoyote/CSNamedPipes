@@ -177,6 +177,7 @@ namespace Coho.IpcLibrary {
             }
             catch (Exception) {
                 m_callback.OnAsyncDisconnect(pd.pipe, pd.state);
+                pd.pipe.Close();
                 lock(this) {
                     bool removed = m_pipes.Remove(pd.pipe);
                     Debug.Assert(removed);
