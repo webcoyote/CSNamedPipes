@@ -21,7 +21,7 @@ public class DemoApp {
                 
     public static void ThreadProc(Object n) {
         Int32 index = (Int32) n;
-        IpcClientPipe cli = new IpcClientPipe("localhost", "ExamplePipeName");
+        IpcClientPipe cli = new IpcClientPipe(".", "ExamplePipeName");
 
         PipeStream pipe;
         try {
