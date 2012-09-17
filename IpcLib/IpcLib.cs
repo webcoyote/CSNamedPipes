@@ -2,6 +2,7 @@
 using System.IO.Pipes;
 using System.Text;
 using System.Threading;
+using System.Timers;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Collections.Generic;
@@ -35,8 +36,7 @@ namespace Coho.IpcLibrary {
         private readonly PipeSecurity m_ps;
 
         private bool m_running;
-        private Thread m_bgthread;
-        private ManualResetEvent m_bgevent;
+        private System.Timers.Timer m_timer;
         private Dictionary<PipeStream, IpcPipeData> m_pipes = new Dictionary<PipeStream, IpcPipeData>();
 
         public IpcServer (
@@ -66,13 +66,14 @@ namespace Coho.IpcLibrary {
             for (int i = 0; i < instances; ++i)
                 IpcServerPipeCreate();
 
-            // Create a background thread to detect dead connections
-            m_bgevent = new ManualResetEvent(false);
-            m_bgthread = new Thread(new ThreadStart(BgThreadProc));
-            m_bgthread.Start();
+            // Create a timer to poll for dead connections
+            m_timer = new System.Timers.Timer(5000);
+            m_timer.AutoReset = true;
+            m_timer.Elapsed += new ElapsedEventHandler(OnTimerElapsed);
+            m_timer.Start();
         }
 
-        public void BgThreadProc() {
+        public void OnTimerElapsed(object state, ElapsedEventArgs e) {
             // This function blows because it should be unncessary, but it is apparently the only way
             // to detect dead pipes. Alternative methods that don't work:
             // 1. Set ReadTimeout on PipeStream: doesn't work on async sockets
@@ -81,29 +82,23 @@ namespace Coho.IpcLibrary {
             //    pinging protocol. Either way, the client then needs to implement pinging - yuck!
             // 3. Have C# BeginRead fail when the remote side gets closed? Since the pipe needs to
             //    detect disconnect so IsConnected works properly, it must already know!
-            do {
-                lock(m_pipes) {
-                    foreach(var pipe in m_pipes.Keys) {
-                        if (!pipe.IsConnected)
-                            pipe.Close();
-                    }
-                }
-            } while (!m_bgevent.WaitOne(5000));
-        }
-
-        public void IpcServerStop () {
-            
-            // Close all pipes asynchronously
             lock(m_pipes) {
-                if (m_running) {
-                    m_running = false;
-                    m_bgevent.Set();
-                    foreach(var pipe in m_pipes.Keys)
+                foreach(var pipe in m_pipes.Keys) {
+                    if (!pipe.IsConnected)
                         pipe.Close();
                 }
             }
+        }
 
-            m_bgthread.Join();
+        public void IpcServerStop () {
+            m_timer.Close();
+            
+            // Close all pipes asynchronously
+            lock(m_pipes) {
+                m_running = false;
+                foreach(var pipe in m_pipes.Keys)
+                    pipe.Close();
+            }
 
             // Wait for all pipes to close
             for (;;) {
