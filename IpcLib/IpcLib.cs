@@ -83,9 +83,9 @@ namespace Coho.IpcLibrary {
             //    detect disconnect so IsConnected works properly, it must already know!
             do {
                 lock(m_pipes) {
-                    foreach(KeyValuePair<PipeStream, IpcPipeData> kvp in m_pipes) {
-                        if (!kvp.Key.IsConnected)
-                            kvp.Key.Close();
+                    foreach(var pipe in m_pipes.Keys) {
+                        if (!pipe.IsConnected)
+                            pipe.Close();
                     }
                 }
             } while (!m_bgevent.WaitOne(5000));
@@ -98,8 +98,8 @@ namespace Coho.IpcLibrary {
                 if (m_running) {
                     m_running = false;
                     m_bgevent.Set();
-                    foreach(KeyValuePair<PipeStream, IpcPipeData> kvp in m_pipes)
-                        kvp.Key.Close();
+                    foreach(var pipe in m_pipes.Keys)
+                        pipe.Close();
                 }
             }
 
