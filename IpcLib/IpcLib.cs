@@ -82,7 +82,7 @@ namespace Coho.IpcLibrary {
             // 3. Have C# BeginRead fail when the remote side gets closed? Since the pipe needs to
             //    detect disconnect so IsConnected works properly, it must already know!
             do {
-                lock(this) {
+                lock(m_pipes) {
                     foreach(KeyValuePair<PipeStream, IpcPipeData> kvp in m_pipes) {
                         if (!kvp.Key.IsConnected)
                             kvp.Key.Close();
@@ -94,7 +94,7 @@ namespace Coho.IpcLibrary {
         public void IpcServerStop () {
             
             // Close all pipes asynchronously
-            lock(this) {
+            lock(m_pipes) {
                 if (m_running) {
                     m_running = false;
                     m_bgevent.Set();
@@ -108,7 +108,7 @@ namespace Coho.IpcLibrary {
             // Wait for all pipes to close
             for (;;) {
                 int count;
-                lock(this) {
+                lock(m_pipes) {
                     count = m_pipes.Count;
                 }
                 if (count == 0)
@@ -148,7 +148,7 @@ namespace Coho.IpcLibrary {
 
             // Add connection to connection list
             bool running;
-            lock(this) {
+            lock(m_pipes) {
                 running = m_running;
                 if (running)
                     m_pipes.Add(pd.pipe, pd);
@@ -178,7 +178,7 @@ namespace Coho.IpcLibrary {
             catch (Exception) {
                 m_callback.OnAsyncDisconnect(pd.pipe, pd.state);
                 pd.pipe.Close();
-                lock(this) {
+                lock(m_pipes) {
                     bool removed = m_pipes.Remove(pd.pipe);
                     Debug.Assert(removed);
                 }
