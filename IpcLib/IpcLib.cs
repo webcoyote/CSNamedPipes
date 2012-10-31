@@ -1,8 +1,6 @@
 ﻿using System;
 using System.IO.Pipes;
-using System.Text;
 using System.Threading;
-using System.Timers;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Collections.Generic;
@@ -36,7 +34,6 @@ namespace Coho.IpcLibrary {
         private readonly PipeSecurity m_ps;
 
         private bool m_running;
-        private System.Timers.Timer m_timer;
         private Dictionary<PipeStream, IpcPipeData> m_pipes = new Dictionary<PipeStream, IpcPipeData>();
 
         public IpcServer (
@@ -65,34 +62,9 @@ namespace Coho.IpcLibrary {
             // Start accepting connections
             for (int i = 0; i < instances; ++i)
                 IpcServerPipeCreate();
-
-            // Create a timer to poll for dead connections
-            m_timer = new System.Timers.Timer(5000);
-            m_timer.AutoReset = true;
-            m_timer.Elapsed += new ElapsedEventHandler(OnTimerElapsed);
-            m_timer.Start();
-        }
-
-        public void OnTimerElapsed(object state, ElapsedEventArgs e) {
-            // This function blows because it should be unncessary, but it is apparently the only way
-            // to detect dead pipes. Alternative methods that don't work:
-            // 1. Set ReadTimeout on PipeStream: doesn't work on async sockets
-            // 2. Use pinging: requires that this library puts an API dependency on the
-            //    application to perform pinging, or forces this library to define a
-            //    pinging protocol. Either way, the client then needs to implement pinging - yuck!
-            // 3. Have C# BeginRead fail when the remote side gets closed? Since the pipe needs to
-            //    detect disconnect so IsConnected works properly, it must already know!
-            lock(m_pipes) {
-                foreach(var pipe in m_pipes.Keys) {
-                    if (!pipe.IsConnected)
-                        pipe.Close();
-                }
-            }
         }
 
         public void IpcServerStop () {
-            m_timer.Close();
-            
             // Close all pipes asynchronously
             lock(m_pipes) {
                 m_running = false;
@@ -167,17 +139,25 @@ namespace Coho.IpcLibrary {
 
         private void BeginRead (IpcPipeData pd) {
             // Asynchronously read a request from the client
-            try {
-                pd.pipe.BeginRead(pd.data, 0, pd.data.Length, OnAsyncMessage, pd);
+            bool isConnected = pd.pipe.IsConnected;
+            if (isConnected) {
+                try {
+                    pd.pipe.BeginRead(pd.data, 0, pd.data.Length, OnAsyncMessage, pd);
+                }
+                catch (Exception) {
+                    isConnected = false;
+                }
             }
-            catch (Exception) {
-                m_callback.OnAsyncDisconnect(pd.pipe, pd.state);
+
+            if (!isConnected) {
                 pd.pipe.Close();
+                m_callback.OnAsyncDisconnect(pd.pipe, pd.state);
                 lock(m_pipes) {
                     bool removed = m_pipes.Remove(pd.pipe);
                     Debug.Assert(removed);
                 }
             }
+
         }
 
         private void OnAsyncMessage(IAsyncResult result) {
