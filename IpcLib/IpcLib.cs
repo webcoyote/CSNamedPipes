@@ -36,6 +36,8 @@ namespace Coho.IpcLibrary {
         private bool m_running;
         private Dictionary<PipeStream, IpcPipeData> m_pipes = new Dictionary<PipeStream, IpcPipeData>();
 
+        private IAsyncResult AwaitingClientConnection;
+
         public IpcServer (
             String      pipename,
             IpcCallback callback,
@@ -82,6 +84,10 @@ namespace Coho.IpcLibrary {
                     break;
                 Thread.Sleep(5);
             }
+
+            if(!AwaitingClientConnection.IsCompleted)
+                ((NamedPipeServerStream)AwaitingClientConnection.AsyncState).Close();
+                //((NamedPipeServerStream)AwaitingClientConnection.AsyncState).EndWaitForConnection(AwaitingClientConnection); THIS WILL WAIT FOREVER. Don't use
         }
 
         private void IpcServerPipeCreate () {
@@ -99,41 +105,50 @@ namespace Coho.IpcLibrary {
             );
 
             // Asynchronously accept a client connection
-            pipe.BeginWaitForConnection(OnClientConnected, pipe);
+            AwaitingClientConnection = pipe.BeginWaitForConnection(OnClientConnected, pipe);
         }
 
         private void OnClientConnected(IAsyncResult result) {
-            // Complete the client connection
-            NamedPipeServerStream pipe = (NamedPipeServerStream) result.AsyncState;
-            pipe.EndWaitForConnection(result);
+            try
+            {
+                // Complete the client connection
+                NamedPipeServerStream pipe = (NamedPipeServerStream)result.AsyncState;
+                pipe.EndWaitForConnection(result);
 
-            // Create client pipe structure
-            IpcPipeData pd = new IpcPipeData();
-            pd.pipe     = pipe;
-            pd.state    = null;
-            pd.data     = new Byte[SERVER_IN_BUFFER_SIZE];
+                // Create client pipe structure
+                IpcPipeData pd = new IpcPipeData();
+                pd.pipe = pipe;
+                pd.state = null;
+                pd.data = new Byte[SERVER_IN_BUFFER_SIZE];
 
-            // Add connection to connection list
-            bool running;
-            lock(m_pipes) {
-                running = m_running;
+                // Add connection to connection list
+                bool running;
+                lock (m_pipes)
+                {
+                    running = m_running;
+                    if (running)
+                        m_pipes.Add(pd.pipe, pd);
+                }
+
+                // If server is still running
                 if (running)
-                    m_pipes.Add(pd.pipe, pd);
-            }
+                {
+                    // Prepare for next connection
+                    IpcServerPipeCreate();
 
-            // If server is still running
-            if (running) {
-                // Prepare for next connection
-                IpcServerPipeCreate();
+                    // Alert server that client connection exists
+                    m_callback.OnAsyncConnect(pipe, out pd.state);
 
-                // Alert server that client connection exists
-                m_callback.OnAsyncConnect(pipe, out pd.state);
-
-                // Accept messages
-                BeginRead(pd);
-            }
-            else {
-                pipe.Close();
+                    // Accept messages
+                    BeginRead(pd);
+                }
+                else
+                {
+                    pipe.Close();
+                }
+            } catch(Exception ex)
+            {
+                //Exception reason: NamedPipeServerStream.close() is called when stopped the server. This causes OnClientConnected to be called. It then tries to acces a closed pipe with pipe.EndWaitForConnection
             }
         }
 
